@@ -1,0 +1,80 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+.env/
+ENV/
+
+# ── Build / distribution ──────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+.eggs/
+MANIFEST
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+coverage.xml
+*.coveragerc
+nosetests.xml
+test-results/
+
+# ── Type checking / linting ───────────────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── flow-sast: audit output ───────────────────────────────────────────────────
+# All generated per-run outputs — never commit scan results
+reports/
+evidence/
+
+# Temp Semgrep rule files generated at runtime
+custom_sources.yaml
+**/custom_sources_*.yaml
+
+# ── Claude Code local settings ────────────────────────────────────────────────
+# settings.local.json contains machine-specific permissions — not for sharing
+.claude/settings.local.json
+
+# ── Node.js (gitnexus / tooling) ─────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+
+# ── Internal / working docs ──────────────────────────────────────────────────
+requirement/
+ref/
+logs/
+.claude/

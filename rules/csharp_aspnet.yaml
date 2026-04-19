@@ -1,0 +1,216 @@
+rules:
+  # ── C# ASP.NET SQL Injection ───────────────────────────────────────────────
+  - id: csharp-sqli-sqlcommand
+    message: "Tainted input used in SQL command — potential SQL Injection"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Query[...]
+      - pattern: Request.Form[...]
+      - pattern: Request.Headers[...]
+      - pattern: Request.Cookies[...]
+      - pattern: HttpContext.Request.Query[...]
+      - pattern: HttpContext.Request.Form[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: new SqlCommand($X, ...)
+      - pattern: new SqlCommand($X)
+      - pattern: $CMD.CommandText = $X
+      - pattern: $CMD.CommandText += $X
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021
+
+  - id: csharp-ef-sqli-fromsqlraw
+    message: "Tainted input used in Entity Framework FromSqlRaw — potential SQL Injection"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Query[...]
+      - pattern: Request.Form[...]
+      - pattern: Request.Headers[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: $DB.Set<$T>().FromSqlRaw($X, ...)
+      - pattern: $DB.Database.ExecuteSqlRaw($X, ...)
+      - pattern: $DB.Database.ExecuteSqlCommand($X, ...)
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021
+
+  # ── C# ASP.NET Command Injection ────────────────────────────────────────────
+  - id: csharp-command-injection-process-start
+    message: "Process.Start() called with tainted input — potential Command Injection"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Query[...]
+      - pattern: Request.Form[...]
+      - pattern: Request.Headers[...]
+      - pattern: HttpContext.Request.Query[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: Process.Start($X, ...)
+      - pattern: Process.Start($X)
+      - pattern: new ProcessStartInfo($X, ...)
+    metadata:
+      category: security
+      cwe: CWE-78
+      owasp: A03:2021
+
+  # ── C# ASP.NET Path Traversal ───────────────────────────────────────────────
+  - id: csharp-path-traversal-file-access
+    message: "File access with tainted input — potential Path Traversal"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Query[...]
+      - pattern: Request.Form[...]
+      - pattern: Request.Headers[...]
+      - pattern: HttpContext.Request.Query[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: File.ReadAllText($X, ...)
+      - pattern: File.ReadAllBytes($X)
+      - pattern: File.WriteAllText($X, ...)
+      - pattern: File.Delete($X)
+      - pattern: File.OpenRead($X)
+      - pattern: File.OpenWrite($X)
+      - pattern: File.Open($X, ...)
+    metadata:
+      category: security
+      cwe: CWE-22
+      owasp: A01:2021
+
+  # ── C# ASP.NET Insecure Deserialization ─────────────────────────────────────
+  - id: csharp-insecure-deserialization-binaryformatter
+    message: "BinaryFormatter.Deserialize() used — RCE via insecure deserialization"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Body
+      - pattern: Request.Form[...]
+      - pattern: Request.Query[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: $BF.Deserialize(...)
+    metadata:
+      category: security
+      cwe: CWE-502
+      owasp: A08:2021
+
+  # ── C# ASP.NET XSS ──────────────────────────────────────────────────────────
+  - id: csharp-xss-response-write
+    message: "Tainted input written directly to response — potential XSS"
+    severity: ERROR
+    languages: [csharp]
+    mode: taint
+    pattern-sources:
+      - pattern: Request.Query[...]
+      - pattern: Request.Form[...]
+      - pattern: Request.Headers[...]
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : Controller {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : ControllerBase {
+                  ...
+                  public $RET $METHOD(..., $TYPE $ARG, ...) { ... }
+                  ...
+              }
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - pattern: Response.Write($X)
+      - pattern: Response.WriteAsync($X)
+    metadata:
+      category: security
+      cwe: CWE-79
+      owasp: A03:2021

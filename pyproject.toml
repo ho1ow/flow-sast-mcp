@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flow-sast-mcp"
+version = "0.1.0"
+description = "MCP server for flow-sast security audit pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0",
+    "python-dotenv",
+    "httpx",
+]
+
+[project.scripts]
+flow-sast-mcp         = "flow_sast_mcp.__main__:main"
+flow-sast-install-mcp = "flow_sast_mcp.install_mcp:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["flow_sast_mcp*"]
+
+[tool.setuptools.package-dir]
+"flow_sast_mcp" = "flow_sast_mcp"

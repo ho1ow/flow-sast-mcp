@@ -1,0 +1,118 @@
+rules:
+  # ── Python SSTI ───────────────────────────────────────────────────────────────
+  - id: python-jinja2-ssti-render-template-string
+    message: "render_template_string() called with tainted input — potential SSTI"
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.args[...]
+      - pattern: request.form.get(...)
+      - pattern: request.form[...]
+      - pattern: request.json
+      - pattern: request.get_json()
+      - pattern: request.data
+      - pattern: request.values.get(...)
+      - pattern: request.GET.get(...)
+      - pattern: request.POST.get(...)
+    pattern-sinks:
+      - pattern: render_template_string(...)
+      - pattern: flask.render_template_string(...)
+      - pattern: jinja2.Environment().from_string(...)
+      - pattern: jinja2.Template(...)
+    metadata:
+      category: security
+      cwe: CWE-94
+      owasp: A03:2021
+
+  # ── Python Deserialization ────────────────────────────────────────────────────
+  - id: python-pickle-loads-tainted
+    message: "pickle.loads() with tainted input — RCE via deserialization"
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern: request.data
+      - pattern: request.body
+      - pattern: request.get_json()
+      - pattern: request.files
+      - pattern: open(...)
+    pattern-sinks:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: dill.loads(...)
+      - pattern: marshal.loads(...)
+
+  - id: python-yaml-unsafe-load
+    message: "yaml.load() with unsafe Loader — use yaml.safe_load() instead"
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern: request.data
+      - pattern: request.body
+      - pattern: request.get_json()
+      - pattern: open(...)
+    pattern-sinks:
+      - pattern: yaml.load(..., Loader=yaml.Loader)
+      - pattern: yaml.load(..., Loader=yaml.UnsafeLoader)
+      - pattern: yaml.load(..., Loader=yaml.FullLoader)
+
+  # ── Django ORM raw queries ────────────────────────────────────────────────────
+  - id: django-orm-raw-f-string
+    message: "Django ORM raw() with f-string — potential SQLi"
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: |
+          $MODEL.objects.raw(f"...")
+      - pattern: |
+          $MODEL.objects.raw(f'...')
+      - pattern: |
+          $MODEL.objects.raw("..." + $VAR)
+      - pattern: |
+          $MODEL.objects.extra(where=[f"..."])
+
+  - id: python-cursor-execute-f-string
+    message: "cursor.execute() with f-string or % formatting — potential SQLi"
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: |
+          $CURSOR.execute(f"...")
+      - pattern: |
+          $CURSOR.execute(f'...')
+      - pattern: |
+          $CURSOR.execute("..." % $VAR)
+      - pattern: |
+          $CURSOR.execute("..." + $VAR)
+
+  # ── Python OS Command Injection ───────────────────────────────────────────────
+  - id: python-os-system-tainted
+    message: "os.system() with tainted input — command injection"
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.json
+      - pattern: request.data
+      - pattern: request.GET.get(...)
+      - pattern: request.POST.get(...)
+    pattern-sinks:
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+      - pattern: subprocess.run(...)
+      - pattern: subprocess.call(...)
+      - pattern: subprocess.Popen(...)
+      - pattern: subprocess.check_output(...)
+
+  # ── Python os.environ as taint source ────────────────────────────────────────
+  - id: python-environ-taint-source
+    message: "os.environ value used as taint source — verify it is not attacker-controlled"
+    severity: WARNING
+    languages: [python]
+    pattern: |
+      $X = os.environ.get(...)
