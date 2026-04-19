@@ -285,6 +285,15 @@ def run_context(
         result["process_flows"] = _discover_process_flows(repo, flow_topics)
         result["flow_topics_used"] = flow_topics
 
+    # Pass 3 fallback for entry_points — always runs (covers [WebMethod], @app.route, etc.)
+    # Merges with gitnexus results if available, provides full coverage when not.
+    surface_entries = _scan_entry_points(repo)
+    if not result["entry_points"]:
+        result["entry_points"] = surface_entries
+    else:
+        existing_ids = {e["id"] for e in result["entry_points"]}
+        result["entry_points"] += [e for e in surface_entries if e["id"] not in existing_ids]
+
     surface_sinks = _function_surface_scan(repo)                    # Pass 3
 
     result["custom_sinks"] = _merge_sink_discoveries(
@@ -515,6 +524,111 @@ def _discover_heuristic_sinks(repo: str) -> List[dict]:
 # Pure Python, no external dependency.
 # Analogous to _regex_fallback in secrets.py and _build_extra_sources_rule
 # in semgrep.py: always runs regardless of whether gitnexus is available.
+
+# Entry point annotation patterns by language/framework
+_ENTRY_POINT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
+    # ASP.NET Web Services (.asmx)
+    (re.compile(r'\[WebMethod(?:[^\]]*)\]', re.IGNORECASE), "cs", "asmx_webmethod"),
+    # ASP.NET Core MVC
+    (re.compile(r'\[(?:Http)(?:Get|Post|Put|Delete|Patch)(?:[^\]]*)\]', re.IGNORECASE), "cs", "aspnet_core"),
+    # Python Flask/FastAPI/Starlette
+    (re.compile(r'@(?:app|router|blueprint)\s*\.\s*(?:get|post|put|delete|patch|route)\s*\(', re.IGNORECASE), "py", "flask_fastapi"),
+    # Java Spring
+    (re.compile(r'@(?:GetMapping|PostMapping|PutMapping|DeleteMapping|RequestMapping|PatchMapping)\b'), "java", "spring"),
+    # Java JAX-RS
+    (re.compile(r'@(?:GET|POST|PUT|DELETE|PATCH)\b\s*(?:@Path)?'), "java", "jaxrs"),
+    # PHP Laravel/Symfony route closures
+    (re.compile(r'Route\s*::\s*(?:get|post|put|delete|patch|any)\s*\(', re.IGNORECASE), "php", "laravel"),
+    # Node.js Express
+    (re.compile(r'(?:app|router)\s*\.\s*(?:get|post|put|delete|patch|all)\s*\(', re.IGNORECASE), "js", "express"),
+    # Go net/http HandleFunc
+    (re.compile(r'(?:http\.HandleFunc|mux\.HandleFunc|router\.(?:GET|POST|PUT|DELETE|PATCH|HandleFunc))\s*\('), "go", "go_http"),
+]
+
+_METHOD_SIG_PATTERNS: dict[str, re.Pattern] = {
+    "cs":   re.compile(r'public\s+\S+\s+(\w+)\s*\(([^)]*)\)'),
+    "java": re.compile(r'(?:public|protected)\s+\S+\s+(\w+)\s*\(([^)]*)\)'),
+    "py":   re.compile(r'def\s+(\w+)\s*\(([^)]*)\)'),
+    "php":  re.compile(r'function\s+(\w+)\s*\(([^)]*)\)'),
+    "go":   re.compile(r'func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(([^)]*)\)'),
+    "js":   re.compile(r'(?:async\s+)?function\s+(\w+)\s*\(|(?:const|let|var)\s+(\w+)\s*='),
+}
+
+_EXT_TO_LANG: dict[str, str] = {
+    ".cs": "cs", ".java": "java", ".kt": "java",
+    ".py": "py", ".php": "php", ".go": "go",
+    ".js": "js", ".ts": "js", ".mjs": "js", ".cjs": "js",
+}
+
+
+def _scan_entry_points(repo_path: str) -> list[dict]:
+    """
+    Pass 3 fallback for entry_points — always runs regardless of gitnexus availability.
+    Scans for HTTP endpoint annotation patterns across all supported languages.
+    Covers: [WebMethod] (.asmx), @app.route (Flask), @GetMapping (Spring), etc.
+    """
+    results: list[dict] = []
+    seen: set[str] = set()
+    repo = Path(repo_path)
+
+    for f in repo.rglob("*"):
+        if not f.is_file():
+            continue
+        ext = f.suffix.lower()
+        lang = _EXT_TO_LANG.get(ext)
+        if not lang:
+            continue
+        if any(skip in f.parts for skip in _SCAN_SKIP_DIRS):
+            continue
+
+        try:
+            content = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        rel = str(f.relative_to(repo))
+        lines = content.splitlines()
+
+        for pattern, pat_lang, framework in _ENTRY_POINT_PATTERNS:
+            if pat_lang != lang:
+                continue
+            for m in pattern.finditer(content):
+                ann_lineno = content[: m.start()].count("\n") + 1
+                # Find the method/function signature in the next 5 lines
+                method_name = ""
+                params: list[str] = []
+                sig_re = _METHOD_SIG_PATTERNS.get(lang)
+                if sig_re:
+                    for j in range(ann_lineno, min(ann_lineno + 5, len(lines))):
+                        sig = sig_re.search(lines[j])
+                        if sig:
+                            method_name = sig.group(1) if sig.group(1) else (sig.lastindex and sig.group(sig.lastindex) or "")
+                            raw_params = sig.group(2) if sig.lastindex >= 2 else ""
+                            params = [p.strip().split()[-1] for p in raw_params.split(",") if p.strip()]
+                            ann_lineno = j + 1
+                            break
+
+                if not method_name:
+                    continue
+
+                uid = hashlib.md5(f"{rel}:{ann_lineno}:{method_name}".encode()).hexdigest()[:10]
+                if uid in seen:
+                    continue
+                seen.add(uid)
+                results.append({
+                    "id": uid,
+                    "handler": method_name,
+                    "file": rel,
+                    "line": ann_lineno,
+                    "params": params,
+                    "framework": framework,
+                    "auth_middleware": [],
+                    "auth_required": False,
+                    "tool": "surface_scan",
+                })
+
+    return results
+
 
 def _function_surface_scan(repo_path: str) -> List[dict]:
     """

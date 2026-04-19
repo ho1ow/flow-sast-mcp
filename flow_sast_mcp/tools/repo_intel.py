@@ -56,7 +56,7 @@ MANIFEST_FILES = [
     # Rust
     "Cargo.toml",
     # .NET / C#
-    "*.csproj", "*.sln",
+    "**/*.csproj", "**/*.sln",
     # Generic
     "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
 ]

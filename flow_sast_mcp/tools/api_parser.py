@@ -78,6 +78,11 @@ CS_ROUTE_RE = re.compile(
     r'\[(?:Http)?(Get|Post|Put|Delete|Patch)(?:\s*\(\s*["\']([^"\']+)["\']\s*\))?\]',
     re.IGNORECASE,
 )
+# ASP.NET Web Services (.asmx) — [WebMethod] decorated public methods
+CS_WEBMETHOD_RE = re.compile(r'\[WebMethod(?:[^\]]*)\]', re.IGNORECASE)
+CS_METHOD_SIG_RE = re.compile(
+    r'public\s+\S+\s+(\w+)\s*\(([^)]*)\)',
+)
 CS_BASE_ROUTE_RE = re.compile(
     r'\[Route\(\s*["\']([^"\']+)["\']\s*\)\]',
     re.IGNORECASE,
@@ -484,10 +489,46 @@ def _parse_ruby(content: str, file_path: str) -> List[dict]:
     return endpoints
 
 
+def _parse_webmethod(content: str, file_path: str) -> List[dict]:
+    """Parse ASP.NET Web Services (.asmx.cs) — [WebMethod] decorated public methods."""
+    endpoints = []
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        if CS_WEBMETHOD_RE.search(lines[i]):
+            # Look ahead for the method signature
+            for j in range(i + 1, min(i + 5, len(lines))):
+                m = CS_METHOD_SIG_RE.search(lines[j])
+                if m:
+                    method_name = m.group(1)
+                    raw_params = m.group(2)
+                    params = []
+                    for p in raw_params.split(","):
+                        p = p.strip()
+                        if p:
+                            parts = p.split()
+                            pname = parts[-1] if parts else p
+                            params.append({"name": pname, "type": "string", "location": "soap"})
+                    auth_tags = _local_auth_tags(lines[:i], i)
+                    # SOAP endpoints have no HTTP verb — use POST (SOAP default)
+                    endpoints.append(_make_ep(
+                        "POST", f"/{method_name}", params, "",
+                        file_path, j + 1, "asmx_webmethod", auth_tags,
+                    ))
+                    break
+        i += 1
+    return endpoints
+
+
 def _parse_csharp(content: str, file_path: str) -> List[dict]:
     endpoints = []
     lines = content.splitlines()
     base_path = ""
+
+    # ASP.NET Web Services (.asmx): [WebMethod] takes priority
+    if CS_WEBMETHOD_RE.search(content):
+        return _parse_webmethod(content, file_path)
+
     # Find class-level route
     for line in lines[:50]:
         m = CS_BASE_ROUTE_RE.search(line)

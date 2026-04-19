@@ -79,7 +79,7 @@ def run(run_id: str, repo: str, stack: str, extra_sources: List[str] = None) -> 
             cmd += ["--config", patterns_yaml]
 
     cmd += [
-        "--timeout", "300",
+        "--timeout", "3600",
         "--max-memory", "2048",
         "-j", "4",
         repo,
