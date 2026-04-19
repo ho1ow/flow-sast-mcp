@@ -30,13 +30,12 @@ def run(run_id: str, findings: List[dict], file_prefix: str = "findings") -> dic
     """Write verified findings to findings/{file_prefix}.json and findings/{file_prefix}.md."""
     ensure_run_dirs(run_id)
 
-    # Save JSON
+    # Save JSON via persistence helper
     saved_json = write(run_id, "findings", f"{file_prefix}.json", findings)
 
-    # Generate Markdown
+    # Save Markdown — persistence.write() is JSON-only, so write text directly
     md_content = _generate_markdown(run_id, findings, file_prefix)
     md_path = Path(REPORTS_DIR) / run_id / "findings" / f"{file_prefix}.md"
-    md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md_content, encoding="utf-8")
 
     return {
@@ -46,7 +45,6 @@ def run(run_id: str, findings: List[dict], file_prefix: str = "findings") -> dic
         "medium_count": sum(1 for f in findings if f.get("severity") == "MEDIUM"),
         "saved_to_json": saved_json,
         "saved_to_md": str(md_path),
-        "warnings": warnings,
     }
 
 
