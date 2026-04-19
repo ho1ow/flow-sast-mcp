@@ -26,8 +26,20 @@ from typing import Dict, List, Optional
 
 from flow_sast_mcp.shared.persistence import write, ensure_run_dirs
 
-GITNEXUS_BINARY = os.environ.get("GITNEXUS_BINARY", "gitnexus")
 GITNEXUS_TIMEOUT = int(os.environ.get("GITNEXUS_TIMEOUT", "120"))
+
+
+def _resolve_gitnexus_binary() -> str:
+    """Resolve gitnexus binary, falling back to shutil.which for MCP subprocess PATH gaps."""
+    import shutil
+    explicit = os.environ.get("GITNEXUS_BINARY", "")
+    if explicit:
+        return explicit
+    found = shutil.which("gitnexus")
+    return found if found else "gitnexus"
+
+
+GITNEXUS_BINARY = _resolve_gitnexus_binary()
 
 # ── Known sink list for wrapper discovery (STEP1_QUERY) ───────────────────────
 # Override via env: GITNEXUS_KNOWN_SINKS=exec,system,myCustomSink (comma-separated)
