@@ -26,6 +26,32 @@ BUILTIN_CONFIGS = [
     "p/owasp-top-ten",
 ]
 
+# Stack-specific additional rulesets — framework stacks include base language ruleset
+STACK_CONFIGS: dict[str, list[str]] = {
+    # Base languages
+    "dotnet":     ["p/csharp"],
+    "php":        ["p/php"],
+    "java":       ["p/java"],
+    "python":     ["p/python"],
+    "node":       ["p/javascript", "p/typescript"],
+    # Frameworks → framework ruleset + base language
+    "aspnet":     ["p/csharp"],
+    "spring":     ["p/java", "p/spring"],
+    "laravel":    ["p/php", "p/laravel"],
+    "symfony":    ["p/php"],
+    "codeigniter":["p/php"],
+    "django":     ["p/python", "p/django"],
+    "flask":      ["p/python", "p/flask"],
+    "fastapi":    ["p/python"],
+    "express":    ["p/javascript", "p/typescript", "p/nodejs"],
+    "nestjs":     ["p/javascript", "p/typescript", "p/nodejs"],
+    "nextjs":     ["p/javascript", "p/typescript", "p/react"],
+    "ruby":       ["p/ruby", "p/rails"],
+    "rails":      ["p/ruby", "p/rails"],
+    "go":         ["p/golang"],
+    "gin":        ["p/golang"],
+}
+
 # ── Sink rule ID prefixes → vuln type mapping ─────────────────────────────────
 SINK_RULE_PREFIXES = {
     "sqli":           ["sql-injection", "sqli", "raw-query", "execute-string"],
@@ -65,6 +91,10 @@ def run(run_id: str, repo: str, stack: str, extra_sources: List[str] = None) -> 
     # Build command
     cmd = ["semgrep", "--json", "--no-git-ignore"]
     for c in BUILTIN_CONFIGS:
+        cmd += ["--config", c]
+
+    # Stack-specific rulesets (framework + base language)
+    for c in STACK_CONFIGS.get(stack.lower(), []):
         cmd += ["--config", c]
 
     # Custom rules dir alongside this project

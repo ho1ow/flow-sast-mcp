@@ -81,11 +81,12 @@ def run(run_id: str) -> dict[str, Any]:
     """
     ensure_run_dirs(run_id)
 
-    semgrep_sinks   = _load(run_id, "sinks.json",        default=[])
-    semgrep_sources = _load(run_id, "sources.json",      default=[])
-    endpoints_data  = _load(run_id, "endpoints.json",    default={})
-    business_ctx    = _load(run_id, "business_ctx.json", default={})
-    repo_intel      = _load(run_id, "repo_intel.json",   default={})
+    semgrep_sinks   = _load(run_id, "sinks.json",         default=[])
+    semgrep_sources = _load(run_id, "sources.json",       default=[])
+    endpoints_data  = _load(run_id, "endpoints.json",     default={})
+    business_ctx    = _load(run_id, "business_ctx.json",  default={})
+    repo_intel      = _load(run_id, "repo_intel.json",    default={})
+    repo_structure  = _load(run_id, "repo_structure.json", default={})
 
     endpoints = endpoints_data if isinstance(endpoints_data, list) else endpoints_data.get("endpoints", [])
 
@@ -148,6 +149,16 @@ def run(run_id: str) -> dict[str, Any]:
         name = _fn_name(sink.get("code", ""))
         if name:
             _register(sink_registry, name, "semgrep", score=2, vuln_type=sink.get("type",""))
+
+    # Surface sinks from gitnexus_context Pass 3 (always available — no semgrep dependency)
+    # HIGH confidence = Pass 1 known-sink wrapper; MEDIUM = heuristic/surface scan
+    for sink in repo_structure.get("custom_sinks", []):
+        if sink.get("confidence") in ("HIGH", "MEDIUM"):
+            name = sink.get("name", "")
+            if name:
+                score = 2 if sink.get("confidence") == "HIGH" else 1
+                _register(sink_registry, name, "surface_scan", score=score,
+                           vuln_type=sink.get("vuln_type", "unknown"))
 
     # ── 3. Prioritize ─────────────────────────────────────────────────────────
 
@@ -215,25 +226,12 @@ def run(run_id: str) -> dict[str, Any]:
 
     # ── 6. Assemble and save ───────────────────────────────────────────────────
 
-    # Enrich extra_topics with keywords ONLY from high-risk flow_domains
-    # (domains with both risk_signals AND sink_hints — strongest structural signal).
-    # Claude reads all flow_domains in Step 1b.5 and adds further inferred keywords.
-    # We deliberately do NOT auto-add every domain name — for ASMX/RPC stacks each
-    # endpoint becomes its own "domain" (execsql, getdataset, ...) which floods the
-    # list with function names that are useless for gitnexus flow-topic queries.
-    high_risk_domains = [
-        d for d in flow_domains
-        if d.get("sink_hints") and d.get("risk_signals")
-    ]
-    for domain in high_risk_domains[:5]:  # cap: top 5 most risky
+    # Enrich extra_topics with domain keywords discovered from flow_domains
+    for domain in flow_domains:
         for kw in domain.get("topic_keywords", []):
-            # Only add short semantic keywords, not function names
-            # Heuristic: skip if camelCase (contains uppercase after first char)
-            # or longer than 12 chars — those are likely function names, not domains
-            if kw and len(kw) <= 12 and kw == kw.lower() and kw not in extra_topics:
+            if kw not in extra_topics:
                 extra_topics.append(kw)
-
-    extra_topics = sorted(set(extra_topics))[:20]  # hard cap: 20 max
+    extra_topics = sorted(set(extra_topics))
     gitnexus_params["extra_topics"] = extra_topics
 
     strategy = {
@@ -325,9 +323,11 @@ def _extract_extra_topics(business_ctx: dict, repo_intel: dict) -> list[str]:
             if "multi-tenant" in note_lower or "company_id" in note_lower:
                 topics.update(["company","tenant"])
 
-    # NOTE: api_names (function names like GetDataSet, ExecSQL) are NOT added here —
-    # they go to gitnexus_params.ctx_api_names for Cypher WHERE entry.name IN [...]
-    # Adding function names to extra_topics floods gitnexus flow-topic queries.
+    # From api_names in context
+    for n in business_ctx.get("api_names", []):
+        name = n.get("name","")
+        if name and len(name) > 3:
+            topics.add(name.lower())
 
     return sorted(topics)
 
