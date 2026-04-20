@@ -61,6 +61,23 @@ TEST_FILE_PATTERNS = [
 ENTRY_POINT_HINTS = ["controller", "route", "handler", "action", "api", "endpoint"]
 
 
+def _normalize_path(p) -> dict:
+    """Normalize string or gitnexus-row path to dict compatible with triage schema."""
+    if isinstance(p, dict):
+        return p
+    if isinstance(p, str):
+        return {
+            "entry_fn": p, "entry_file": p,
+            "sink": {"name": "", "type": "custom", "file": ""},
+            "tool": "manual", "score": 0,
+        }
+    return {
+        "entry_fn": str(p), "entry_file": "",
+        "sink": {"name": "", "type": "custom", "file": ""},
+        "tool": "manual", "score": 0,
+    }
+
+
 def run(run_id: str, paths: List[dict], sensitive_flows: List[dict] = None,
         cx_findings: List[dict] = None) -> dict:
     """Score + filter candidate paths."""
@@ -69,6 +86,8 @@ def run(run_id: str, paths: List[dict], sensitive_flows: List[dict] = None,
         sensitive_flows = []
     if cx_findings is None:
         cx_findings = []
+
+    paths = [_normalize_path(p) for p in paths]
 
     # Dedup by id
     seen: set[str] = set()

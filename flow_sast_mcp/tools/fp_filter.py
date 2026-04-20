@@ -36,6 +36,15 @@ UTILITY_PATH_PATTERNS = [
 FP_MIN_SCORE = 4
 
 
+def _normalize_path(p) -> dict:
+    """Normalize string or gitnexus-row path to dict compatible with fp_filter schema."""
+    if isinstance(p, dict):
+        return p
+    if isinstance(p, str):
+        return {"entry_fn": p, "entry_file": p, "sink": {}, "tool": "manual", "score": 0}
+    return {"entry_fn": str(p), "entry_file": "", "sink": {}, "tool": "manual", "score": 0}
+
+
 def run(run_id: str, paths: List[dict]) -> dict:
     """Structural false positive filter for candidate paths."""
     ensure_run_dirs(run_id)
@@ -44,7 +53,7 @@ def run(run_id: str, paths: List[dict]) -> dict:
     skipped: List[dict]      = []
     low_priority: List[dict] = []
 
-    for path in paths:
+    for path in [_normalize_path(p) for p in paths]:
         decision, reason = _evaluate(path)
         annotated = {**path, "fp_decision": decision, "fp_reason": reason}
         if decision == "skip":

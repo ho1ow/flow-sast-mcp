@@ -120,7 +120,7 @@ def run(run_id: str, repo: str, stack: str, extra_sources: List[str] = None) -> 
     error_msg = None
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=360)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         raw: dict = {}
         if result.stdout:
             try:

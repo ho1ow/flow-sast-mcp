@@ -1,0 +1,136 @@
+Hãy đóng vai chuyên gia bảo mật mã nguồn (Security Auditor).
+Sử dụng flow-sast MCP tools + gitnexus MCP để kiểm toán bảo mật toàn diện.
+Tuân thủ nghiêm ngặt Workflow trong CLAUDE.md.
+
+Thông tin dự án:
+- run_id: 
+- repo: /path/to/repo
+
+---
+
+[PRE-PRE PHASE]
+Gọi repo_intel(run_id, repo) TRƯỚC TIÊN.
+Ghi nhớ: frameworks[] → stack, security_notes[] → cấu hình Phase 1, auth_relevant_files[] → Phase 3.
+
+Stack mapping:
+  ".NET" / "ASP.NET Core" / ".NET Framework" → stack = "dotnet"
+  "Laravel" / "Symfony"                       → stack = "php"
+  "Spring Boot" / "Java"                      → stack = "java"
+  "Django" / "Flask" / "FastAPI"              → stack = "python"
+  "Express.js" / "NestJS"                     → stack = "node"
+
+---
+
+[PHASE 1 — Catalog]
+
+Step 1a — SONG SONG:
+  semgrep_scan(run_id, repo, stack=<từ repo_intel>)
+  api_parse(run_id, repo, stack=<từ repo_intel>)
+  secrets_scan(run_id, repo)
+
+→ Sau secrets_scan: review catalog/secrets.json ngay.
+  Findings trong .gitnexus/, node_modules/, dist/ → FALSE_POSITIVE, bỏ qua.
+  Confirmed secret trong source thật → write_findings() luôn.
+
+Step 1b — TUẦN TỰ:
+  analyze_catalog(run_id)
+  Đọc kết quả: flow_domains[], gitnexus_params, cypher_hints[]
+
+Step 1b.5 — Flow Inference (Claude tự làm, KHÔNG gọi tool):
+  Đọc flow_domains[], suy luận business flow từng domain.
+  Sinh enriched extra_topics (domain keywords) cho Step 1c.
+
+Step 1c — TUẦN TỰ (gitnexus MCP trực tiếp):
+  repo_name = basename(repo)
+
+  NODE TYPE — xác định từ stack:
+    C# / .NET / Java → :Method
+    Python / JS / TS  → :Function
+
+  1. Đọc 3 resources:
+       gitnexus://repo/<repo_name>/context
+       gitnexus://repo/<repo_name>/processes
+       gitnexus://repo/<repo_name>/clusters
+
+  2. Cypher — custom sinks:
+       MATCH (src:<node>)-[:CALLS]->(sink:<node>)
+       WHERE sink.name =~ '(?i).*(exec|query|command|execute|invoke|dispatch|send|write|drop|remove).*'
+       RETURN DISTINCT sink.name, sink.filePath LIMIT 40
+     → Nếu 0 rows: thử node type kia (Method↔Function) TRƯỚC KHI kết luận không có sinks
+
+  3. Cypher — data models:
+       MATCH (c:Class)
+       WHERE c.filePath =~ '.*(Model|Entity|Repository|Schema|Dao|Service|Manager|Helper|Util).*'
+       RETURN c.name, c.filePath LIMIT 40
+
+  4. Cypher — auth symbols:
+       MATCH (n:<node>)
+       WHERE n.name =~ '(?i).*(auth|jwt|guard|middleware|token|session|login|logout|authenticate|authorize|permission|role|policy|access).*'
+       RETURN n.name AS name, n.filePath AS file, n.startLine AS line LIMIT 30
+     → Merge filePath vào auth_relevant_files[]
+
+  5. Ghi nhớ: custom_sinks[], extra_topics[], data_models[], auth_symbols[]
+
+Step 1d — TUẦN TỰ:
+  gitnexus_plan(run_id)
+  → nhận queries[] + summary { total, called, pending } + node_types.call_node
+
+  Với mỗi query (HIGH priority trước):
+    1. Gọi mcp__gitnexus__* với query.cypher
+    2. Nếu 0 rows → kiểm tra node type trong cypher, retry nếu cần
+    3. gitnexus_tick(run_id, query.label, row_count)
+    4. Lặp đến khi summary.pending == 0
+  → Nếu gitnexus_plan error: đọc error, fix nguyên nhân, retry. KHÔNG bỏ qua.
+
+Step 1e — Caller discovery (bắt buộc):
+  Với mỗi sink tìm được ở Step 1d (row_count > 0):
+    gitnexus_context(sink_name, sink_file_path)
+      → incoming.calls[] → lưu caller_map[sink_name]
+  caller_map → Phase 2 entry points + grep targets
+
+---
+
+⛔ GATE trước Phase 2 — kiểm tra đủ 5 mục:
+  [ ] 1c-2: Cypher custom sinks đã chạy (có retry nếu 0 rows)
+  [ ] 1c-4: Cypher auth symbols đã chạy
+  [ ] 1d:   gitnexus_plan + tất cả queries đã tick ✓
+  [ ] 1e:   caller_map có data cho mỗi sink tìm được
+  [ ] Semgrep fail → caller_map là nguồn taint chính, KHÔNG được skip 1d/1e
+
+---
+
+[PHASE 2 — Connect]
+
+1. Review: caller_map[], endpoints.json, data_models[], secrets.json
+
+2. Fast-paths (bypass Connect pipeline, KHÔNG bypass Phase 1):
+   - endpoints.json idor_candidates[] → direct Phase 3
+   - data_models mass_assign_risk     → direct Phase 3
+   - secrets confirmed                → đã xử lý Phase 1
+
+3. gitnexus_plan(run_id) → queries còn pending.
+   Với mỗi query: mcp__gitnexus__* → gitnexus_tick(run_id, label, row_count).
+
+4. fp_filter(run_id, paths)      ← chấp nhận cả manual paths
+
+5. joern_filter(run_id, repo, paths)   ← thử luôn, bỏ qua nếu unavailable
+
+6. triage_score(run_id, paths)   ← chấp nhận cả manual paths
+
+---
+
+[PHASE 3 — Verify]
+
+Với mỗi scored path:
+1. Đọc TOÀN BỘ file nguồn (không chỉ 300 dòng đầu)
+2. Trace taint path thủ công qua call chain
+3. Auth findings: đọc auth_relevant_files[] (repo_intel + Step 1c auth_symbols)
+4. classify_sink(run_id, sink_name) nếu cần
+5. Quyết định: CONFIRMED / FALSE_POSITIVE / UNCERTAIN
+6. write_findings(run_id, confirmed_findings, file_prefix="technical")
+
+---
+
+⏸ DỪNG sau Phase 3.
+Báo cáo danh sách tóm tắt các lỗ hổng CONFIRMED.
+KHÔNG tự động chạy Phase 4 — chờ lệnh từ tôi.

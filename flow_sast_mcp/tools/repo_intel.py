@@ -480,28 +480,15 @@ def _detect_auth(repo: Path, gitnexus_available: bool) -> dict:
             + ", ".join(str(f.relative_to(repo)) for f in role_files[:5])
         )
 
-    # --- gitnexus query: find auth middleware classes ---
-    gitnexus_auth: list[dict] = []
-    if gitnexus_available:
-        auth_cypher = (
-            "MATCH (n:Symbol) "
-            "WHERE n.name =~ '(?i).*(auth|jwt|guard|middleware|token|session|login|logout|authenticate|authorize).*' "
-            "RETURN n.name AS name, n.filePath AS file, n.type AS type "
-            "LIMIT 30"
-        )
-        rows = _run_gitnexus_cypher(str(repo), auth_cypher)
-        if rows:
-            gitnexus_auth = rows
-            # Extract unique files
-            auth_files_gn = list({r.get("file", "") for r in rows if r.get("file")})
-            auth_files.extend([f for f in auth_files_gn if f not in auth_files])
+    # gitnexus auth symbol query intentionally removed.
+    # Claude calls mcp__gitnexus__* directly in Step 1c with correct node types.
 
     return {
         "mechanisms": found_mechanisms,
         "auth_relevant_files": auth_files[:30],
         "notes": auth_notes,
-        "annotations": deduped_annotations[:50],   # raw annotation hits
-        "gitnexus_symbols": gitnexus_auth,
+        "annotations": deduped_annotations[:50],
+        "gitnexus_symbols": [],   # populated by Claude via mcp__gitnexus__* in Step 1c
     }
 
 

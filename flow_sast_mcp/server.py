@@ -8,6 +8,7 @@ Tools exposed (all prefixed flow-sast__ by MCP):
   semgrep_scan, api_parse, secrets_scan,
   analyze_catalog,                          ← Step 1a→1b synthesis
   gitnexus_context, gitnexus_query,
+  gitnexus_plan, gitnexus_tick,             ← bridge: reads 4 sources, correct node types
   fp_filter, joern_filter, triage_score,
   classify_sink, write_findings, burp_send
 """
@@ -29,6 +30,7 @@ from flow_sast_mcp.tools import (
     secrets,
     catalog_analyzer,
     gitnexus,
+    gitnexus_bridge,
     fp_filter,
     joern,
     triage,
@@ -251,6 +253,42 @@ def create_server() -> Server:
                 },
             ),
             Tool(
+                name="gitnexus_plan",
+                description=(
+                    "Generate a Cypher query plan by reading 4 catalog sources "
+                    "(scan_strategy, repo_structure, business_ctx, endpoints). "
+                    "Uses correct gitnexus node types (Function/Class/Method — not Symbol). "
+                    "Saves gitnexus_progress.json with per-query called/pending status. "
+                    "Claude then calls mcp__gitnexus__* directly for each query, "
+                    "then calls gitnexus_tick to mark done."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {
+                        "run_id": {"type": "string"},
+                    },
+                },
+            ),
+            Tool(
+                name="gitnexus_tick",
+                description=(
+                    "Mark a gitnexus query label as called ✓. "
+                    "Updates gitnexus_progress.json. "
+                    "Call after each mcp__gitnexus__* query completes. "
+                    "Returns updated summary with pending_labels list."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "required": ["run_id", "label", "row_count"],
+                    "properties": {
+                        "run_id":    {"type": "string"},
+                        "label":     {"type": "string", "description": "Query label to tick (e.g. cross_catalog, auth_symbols)"},
+                        "row_count": {"type": "integer", "description": "Number of rows returned by the gitnexus query"},
+                    },
+                },
+            ),
+            Tool(
                 name="fp_filter",
                 description=(
                     "Pattern-based false positive filter for candidate paths. "
@@ -418,6 +456,16 @@ def create_server() -> Server:
                     cypher=arguments["cypher"],
                     label=arguments["label"],
                     phase=arguments["phase"],
+                )
+            elif name == "gitnexus_plan":
+                result = gitnexus_bridge.build_query_plan(
+                    run_id=arguments["run_id"],
+                )
+            elif name == "gitnexus_tick":
+                result = gitnexus_bridge.tick(
+                    run_id=arguments["run_id"],
+                    label=arguments["label"],
+                    row_count=arguments["row_count"],
                 )
             elif name == "fp_filter":
                 result = fp_filter.run(

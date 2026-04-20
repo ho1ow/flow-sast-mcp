@@ -525,7 +525,7 @@ def _cypher_list(names: list[str]) -> str:
 
 def _cypher_entry_to_sink(entries: list[str], sinks: list[str], depth: str, limit: int) -> str:
     return (
-        f"MATCH (entry:Symbol)-[:CALLS*{depth}]->(sink:Symbol)\n"
+        f"MATCH (entry:Function)-[:CALLS*{depth}]->(sink:Function)\n"
         f"WHERE entry.name IN {_cypher_list(entries)}\n"
         f"  AND sink.name  IN {_cypher_list(sinks)}\n"
         "RETURN entry.name AS entry_fn, entry.filePath AS entry_file, entry.line AS entry_line,\n"
@@ -542,7 +542,7 @@ def _cypher_broad(entries: list[str], sinks: list[str], depth: str, limit: int) 
         where_parts.append(f"sink.name  IN {_cypher_list(sinks)}")
     where_clause = "\n   OR ".join(where_parts)
     return (
-        f"MATCH (entry:Symbol)-[:CALLS*{depth}]->(sink:Symbol)\n"
+        f"MATCH (entry:Function)-[:CALLS*{depth}]->(sink:Function)\n"
         f"WHERE {where_clause}\n"
         "RETURN entry.name AS entry_fn, entry.filePath AS entry_file, entry.line AS entry_line,\n"
         "       sink.name  AS sink_fn,  sink.filePath  AS sink_file,  sink.line  AS sink_line\n"

@@ -22,8 +22,9 @@ If the user specifies a run_id (e.g. resuming a session), use that instead.
 | `flow-sast__api_parse` | `catalog/endpoints.json` | Multi-framework |
 | `flow-sast__secrets_scan` | `catalog/secrets.json` | Gitleaks + regex |
 | `flow-sast__analyze_catalog` | `catalog/scan_strategy.json` | Call after Phase 1a — synthesizes all sources, outputs gitnexus_params + cypher_hints |
-| `flow-sast__gitnexus_context` | `catalog/repo_structure.json`, `catalog/data_models.json` | Returns file tree, custom sinks, and ORM Models/Properties |
-| `flow-sast__gitnexus_query` | `catalog/gitnexus_<label>.json` or `connect/gitnexus_<label>.json` | Call iteratively |
+| `flow-sast__gitnexus_context` | `catalog/repo_structure.json`, `catalog/data_models.json` | ⚠️ BYPASSED — dùng `:Symbol` nội bộ → 0 rows. Thay bằng mcp__gitnexus__* trực tiếp (Step 1c) |
+| `flow-sast__gitnexus_plan` | `gitnexus_progress.json` | Reads 4 catalog sources → generates Cypher query plan (Function/Class/Method node types) |
+| `flow-sast__gitnexus_tick` | `gitnexus_progress.json` | Marks a query label as called ✓ after each mcp__gitnexus__* call |
 | `flow-sast__fp_filter` | `connect/filtered_paths.json` | Pattern-based, no LLM |
 | `flow-sast__joern_filter` | `connect/cpg_confirmed.json`, `connect/joern_annotated_paths.json` | Optional, skips if Joern down |
 | `flow-sast__triage_score` | `connect/scored_paths.json` | Threshold default 6 |
@@ -105,7 +106,8 @@ secrets_scan(run_id, repo)
 ```
 
 **Secrets fast-path**: after secrets_scan, review `catalog/secrets.json` directly.
-Confirmed secrets → `write_findings()` immediately. Do not route through Connect pipeline.
+- Findings trong `.gitnexus/`, `node_modules/`, `vendor/`, `dist/`, `build/` → FALSE_POSITIVE (build artifacts)
+- Confirmed secrets trong source code thật → `write_findings()` immediately. Do not route through Connect pipeline.
 
 #### Step 1b — analyze_catalog (sequential, pure Python — no LLM)
 ```
@@ -156,65 +158,123 @@ For each domain in flow_domains (sorted by risk_signals DESC):
        "user file upload"      → add: ["upload","avatar","file","storage"]
 
   4. Generate domain-specific Cypher hint (append to scan_strategy.cypher_hints):
-       MATCH (entry:Symbol)-[:CALLS*1..6]->(sink:Symbol)
+       MATCH (entry:<node>)-[:CALLS*1..6]->(sink:<node>)
        WHERE entry.filePath CONTAINS 'payment'   ← domain path filter
          AND sink.name IN ["OracleCommand",...]   ← sink_hints
        RETURN entry.name, entry.filePath, sink.name, sink.filePath
        LIMIT 40
+       ← <node> = Method (C#/Java) hoặc Function (Python/JS) — xem repo_intel.frameworks
 ```
 
 Result: enriched `extra_topics` list (add your inferred domain keywords) fed into gitnexus_context.  
 This is what makes gitnexus find `PaymentRepository`, `OrderService`, not just generic sinks.
 
-#### Step 1c — gitnexus_context (sequential, uses analyze_catalog + inferred topics)
+#### Step 1c — gitnexus discovery (gitnexus MCP trực tiếp)
+
+**Không dùng flow-sast gitnexus_context** — nó cũng dùng `:Symbol` nội bộ → 0 rows.
+Dùng gitnexus MCP trực tiếp để lấy cùng dữ liệu.
+
 ```
-gitnexus_context(run_id, repo,
-  **scan_strategy.gitnexus_params,  ← pre-computed, no manual extraction
-  extra_topics = <scan_strategy.extra_topics + inferred domain topics from Step 1b.5>)
+repo_name = basename(repo)   ← ví dụ: "TTKT", "Web"
+
+NODE TYPE (QUAN TRỌNG — sai → 0 rows):
+  C# / .NET / Java  → :Method
+  Python / JS / TS  → :Function
+  → Xác nhận từ gitnexus_plan output: node_types.call_node
+
+1. Đọc 3 resources:
+     gitnexus://repo/<repo_name>/context    → file count, symbol count, index status
+     gitnexus://repo/<repo_name>/processes  → execution flows (auth, payment, upload...)
+     gitnexus://repo/<repo_name>/clusters   → module clusters → domain keywords
+
+2. Cypher — custom sinks:
+     MATCH (src:<node>)-[:CALLS]->(sink:<node>)
+     WHERE sink.name =~ '(?i).*(exec|query|command|execute|invoke|dispatch|send|write|drop|remove).*'
+     RETURN DISTINCT sink.name, sink.filePath LIMIT 40
+     ← KHÔNG dùng "delete" trong regex — gitnexus parser conflict với DELETE keyword
+
+   **RETRY RULE**: Nếu kết quả = 0 rows:
+     → Kiểm tra lại node type (thử Method nếu dùng Function, hoặc ngược lại)
+     → Retry với node type kia TRƯỚC KHI kết luận "không có sinks"
+     → KHÔNG được tiếp tục bước tiếp theo khi còn nghi ngờ node type sai
+
+3. Cypher — data models (pattern rộng — bao gồm cả Dao/Service/.NET):
+     MATCH (c:Class)
+     WHERE c.filePath =~ '.*(Model|Entity|Repository|Schema|Dao|Service|Manager|Helper|Util).*'
+     RETURN c.name, c.filePath LIMIT 40
+
+4. Cypher — auth symbols:
+     MATCH (n:<node>)
+     WHERE n.name =~ '(?i).*(auth|jwt|guard|middleware|token|session|login|logout|authenticate|authorize|permission|role|policy|access).*'
+     RETURN n.name AS name, n.filePath AS file, n.startLine AS line LIMIT 30
+     ← Dùng startLine, KHÔNG phải line (property không tồn tại trong gitnexus)
+   → Merge filePath vào repo_intel.auth_relevant_files[]
+
+5. Ghi nhớ: custom_sinks[], extra_topics[], data_models[], auth_symbols[]
+
+**SEMGREP TIMEOUT FALLBACK** (khi semgrep không chạy được):
+  Bước 2 (custom sinks Cypher) + Step 1e (caller discovery) trở thành nguồn taint chính.
+  KHÔNG được bỏ qua 1c/1d/1e khi semgrep fail — đây là lúc graph analysis quan trọng nhất.
 ```
 
-Returns labeled cross-catalog lists for Cypher:
+#### Step 1d — Cypher queries (gitnexus_plan + gitnexus MCP trực tiếp)
+
 ```
-api_entry_points[]   {name, source:"api_parse"}
-semgrep_sink_names[] {name, source:"semgrep"}
-ctx_api_names[]      {name, source:"context"}   ← ExecSQL, GetDataSet, ExecSQLTrans
-ctx_custom_sinks[]   {name, source:"context"}
-custom_sinks[]       (gitnexus 3-pass discovery)
+gitnexus_plan(run_id)
+  → đọc 4 catalog sources tự động:
+      scan_strategy.json  → entry_points, sink_targets, flow_domains
+      repo_structure.json → custom_sinks (gitnexus 3-pass)
+      business_ctx.json   → custom_sinks, api_names
+      endpoints.json      → handler names
+  → sinh Cypher queries với đúng node type (Function/Class/Method)
+  → lưu gitnexus_progress.json
+  → trả về: queries[], summary { total, called, pending }
 ```
 
-#### Step 1d — Cypher queries (use scan_strategy.cypher_hints directly)
+Với mỗi query trong `queries[]` (ưu tiên priority=HIGH trước):
 ```
-Use scan_strategy.cypher_hints[n].cypher directly as gitnexus_query input.
-Priority: HIGH hints first.
-
-gitnexus_query(run_id, repo,
-  cypher = scan_strategy.cypher_hints[0].cypher,   ← "high_priority_paths"
-  label  = scan_strategy.cypher_hints[0].label,
-  phase  = "catalog")
+1. Gọi mcp__gitnexus__* trực tiếp với query.cypher
+2. Nếu kết quả = 0 rows → kiểm tra node type trong query.cypher, retry nếu cần
+3. Gọi gitnexus_tick(run_id, query.label, row_count)
+4. Lặp đến khi summary.pending == 0
 ```
 
-Additional Cypher queries if cypher_hints don't cover all custom sinks:
-```
-  → If custom_sinks found (any confidence):
-      gitnexus_query(label="custom_sinks", phase="catalog",
-        cypher = "MATCH (src)-[:CALLS*1..5]->(sink)
-                  WHERE sink.name IN ['rawExec','charge', ...]
-                  RETURN src.name, src.filePath, src.line, sink.name LIMIT 50")
+**Nếu gitnexus_plan trả về error**: Đọc error message, tìm nguyên nhân, fix rồi retry.
+KHÔNG được bỏ qua Step 1d vì error — đây là bước bắt buộc.
 
-  → If repo_intel.auth_relevant_files found:
-      gitnexus_query(label="auth_symbols", phase="catalog",
-        cypher = "MATCH (n:Symbol)
-                  WHERE n.name =~ '(?i).*(auth|jwt|guard|middleware|token).*'
-                  RETURN n.name, n.filePath, n.type LIMIT 30")
+#### Step 1e — Caller discovery (gitnexus MCP trực tiếp)
 
-  → If "Multi-tenant" in repo_intel.security_notes:
-      gitnexus_query(label="tenant_scope", phase="catalog",
-        cypher = "MATCH (n:Symbol)
-                  WHERE n.filePath CONTAINS 'Repository'
-                    AND NOT n.name CONTAINS 'company_id'
-                    AND NOT n.name CONTAINS 'tenant_id'
-                  RETURN n.name, n.filePath LIMIT 20")
+**Bắt buộc sau khi tìm ra sink nodes** — gitnexus cho biết WHO calls nhưng không cho biết HOW.
+Workflow đúng: Cypher tìm sink → gitnexus_context lấy callers → grep tại call sites.
+
 ```
+Với mỗi sink tìm được ở Step 1d (ưu tiên sinks có row_count > 0):
+  gitnexus_context(sink_name, sink_file_path)
+    → incoming.calls[]   ← danh sách callers (entry points thực sự)
+    → lưu vào caller_map[sink_name] = [caller1, caller2, ...]
+
+Kết quả caller_map → Phase 2 Connect:
+  - Dùng làm entry points cho Cypher path queries
+  - Dùng làm danh sách grep targets (xác nhận string concat tại từng call site)
+```
+
+---
+
+### ⛔ GATE: Checklist bắt buộc trước khi sang Phase 2
+
+**KHÔNG được chuyển sang Phase 2 khi chưa hoàn thành:**
+```
+[ ] 1c-2: Cypher custom sinks trả về kết quả (hoặc đã retry đủ node types)
+[ ] 1c-3: Cypher data models đã chạy
+[ ] 1c-4: Cypher auth symbols đã chạy
+[ ] 1d:   gitnexus_plan đã chạy + tất cả queries đã tick ✓
+[ ] 1e:   gitnexus_context(sink) đã chạy cho mỗi sink tìm được → caller_map có data
+```
+
+**Lý do gate này tồn tại:**
+- Confirmation bias: tìm thấy finding rõ ràng → bỏ qua graph analysis còn lại
+- Fast-path IDOR/mass_assign: chỉ bypass Connect pipeline, KHÔNG bypass Phase 1
+- Semgrep timeout: khi semgrep fail, graph analysis là nguồn taint DUY NHẤT
 
 ---
 
@@ -222,23 +282,23 @@ Additional Cypher queries if cypher_hints don't cover all custom sinks:
 
 ```
 1. Review catalog output:
-   sources.json + sinks.json          (semgrep taint sources/sinks)
-   repo_structure.json custom_sinks   (gitnexus 3-pass: HIGH/MEDIUM/LOW confidence)
-   gitnexus_custom_sinks.json         (data flow to custom sinks)
+   sources.json + sinks.json          (semgrep taint sources/sinks — có thể rỗng nếu timeout)
+   caller_map[]                        (từ Step 1e — nguồn taint chính khi semgrep fail)
    endpoints.json                     (entry points, auth_tags, idor_candidates)
-   data_models.json                   (model fields, sensitive_fields, mass_assign_risk)
+   data_models[]                      (từ Step 1c — model fields)
    business_ctx.custom_sinks          (if provided)
 
-   Fast-paths that bypass Connect pipeline:
+   Fast-paths (bypass Connect pipeline, KHÔNG bypass Phase 1 graph steps):
    - endpoints.json idor_candidates[] → direct Phase 3 Verify (ownership check trace)
-   - data_models.json mass_assign_risk + sinks matching fill()/create() → direct verify
+   - data_models mass_assign_risk + sinks matching fill()/create() → direct verify
    - secrets.json confirmed findings → direct write_findings (already done Phase 1)
 
 2. Generate Cypher path queries tracing entry_points → sinks.
    Prioritize: sensitive_flows from business_ctx, HIGH-confidence sinks, auth_symbols.
 
-3. gitnexus_query(run_id, repo, cypher, label, phase="connect") — iterate as needed.
-   Each query result can reveal new paths → query further.
+3. gitnexus_plan(run_id) → lấy danh sách queries còn pending từ progress file.
+   Với mỗi query: gọi mcp__gitnexus__* trực tiếp → gitnexus_tick(run_id, label, row_count).
+   Kết quả mới có thể reveal thêm paths → sinh Cypher mới → tick tiếp.
 
 4. fp_filter(run_id, paths)
 
